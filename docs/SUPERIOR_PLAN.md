@@ -158,3 +158,13 @@ Each session: `get_usage` first and before every render; stop under the owner's 
 - The face rig is unproven on dynamic-head avatars.
 - "Perfect" is not a state the plan can promise. The plan's promise is narrower: no logged mistake reaches
   the owner again, faces act, feet stay planted, and every frame passes numeric gates before it is shown.
+
+## 9. Status (2026-11-11)
+
+| Step | State |
+|---|---|
+| 1 gates scene/body/face/frame/camera | Built, run on graveyard v3 (found 3 real faults). Not yet run on spirits v7 / garage v6 or with a spec that has head, prop and camera targets. |
+| 2 gates light/final | Built, run on haunt (fails: head darker than fog) and bus stop v3 (final passes; light fails on default luma ranges, which do not suit a night scene). |
+| 3 face rig | Built, tested on DI3STINY (sheet in `gfx_output/_kit_test/di3_sheet.png`): neutral matches the original, smirk/grin/glare/shock/sad read. Blink is wrong (squashed eye). Tested on one avatar only. |
+| 4 motion | `motion_kit.spring()` and gate `motion` built and tested on a synthetic move (hair keeps moving 25 frames after the stop; foot slide and freezes are caught). IK legs/arms NOT built. |
+| 5-9 | Not started. rhubarb, RIFE and wiggle are downloaded in `tools/bin` but never run. |

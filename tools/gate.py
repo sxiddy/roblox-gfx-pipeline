@@ -25,6 +25,15 @@ job.json (all frame values are fractions, x right, y DOWN, like gfx2d grid image
     camera          {"elevation": [lo, hi], "azimuth": [lo, hi], "roll": [lo, hi], "lens": [lo, hi], "distance": [lo, hi]}
                     elevation: deg the lens sits above the head; azimuth: deg around the avatar, 0 = straight in
                     front, + = toward the avatar's right (.P); roll: deg; lens: mm; distance: m to the head.
+    light           (stage "light", renders two 25% frames, run it by name) {"luma": [80, 130], "face_luma": [70, 215],
+                    "max_blown": 0.02, "emit_caps": {"default": 5, "Flame": 30, "Window": 2}, "dark_parts": ["Handle1"],
+                    "dark_max": 70, "percent": 25, "samples": 16}
+    final           (stage "final", run it by name) {"raw": png, "graded": png, "mask": png, "black_point": [0, 18],
+                    "white_min": 170, "saturation": [0.15, 0.75], "max_delta_e": 14}
+    motion          (stage "motion", run it by name) {"frames": [1, 240], "armatures": ["Avatar"],
+                    "max_deg": {"default": 25, "Hand.P": 40}, "max_frozen": 12, "slide_tol": 0.01,
+                    "planted": [{"bone": "Foot.P", "frames": [1, 30]}]}
+The default run is the five fast stages; add light / final explicitly: ... -- job.json scene,body,face,frame,camera,light
 """
 import json
 import math
@@ -316,7 +325,208 @@ def gate_camera(spec):
             out("WARN", f"camera.{k}", f"{v:.1f}, not asserted")
 
 
-GATES = {"scene": gate_scene, "body": gate_body, "face": gate_face, "frame": gate_frame, "camera": gate_camera}
+# ---------------------------------------------------------------- light and final (pixels)
+def load_px(path):
+    """PNG -> float array (h, w, 4) in display values 0..1, top row first."""
+    img = bpy.data.images.load(path, check_existing=False); img.colorspace_settings.name = "Non-Color"
+    w, h = img.size; a = np.empty(w * h * 4, dtype=np.float32); img.pixels.foreach_get(a)
+    bpy.data.images.remove(img)
+    return a.reshape(h, w, 4)[::-1]
+
+
+def luma(px):
+    return (px[..., 0] * 0.2126 + px[..., 1] * 0.7152 + px[..., 2] * 0.0722) * 255
+
+
+def lab(px):
+    c = px[..., :3].astype(np.float64); c = np.where(c > 0.04045, ((c + 0.055) / 1.055) ** 2.4, c / 12.92)
+    m = np.array([[0.4124, 0.3576, 0.1805], [0.2126, 0.7152, 0.0722], [0.0193, 0.1192, 0.9505]])
+    xyz = c @ m.T / np.array([0.9505, 1.0, 1.089])
+    f = np.where(xyz > 0.008856, np.cbrt(xyz), 7.787 * xyz + 16 / 116)
+    return np.stack([116 * f[..., 1] - 16, 500 * (f[..., 0] - f[..., 1]), 200 * (f[..., 1] - f[..., 2])], axis=-1)
+
+
+def quick_render(path, percent, samples, only_avatar=False):
+    s = bpy.context.scene; r = s.render; a = arm()
+    keep = ({a} | set(a.children_recursive)) if a else set()
+    hid = [o for o in s.objects if only_avatar and o not in keep and o.type not in {"LIGHT", "CAMERA"} and not o.hide_render]
+    old = (r.resolution_percentage, r.filepath, r.film_transparent, r.image_settings.file_format, r.image_settings.color_mode)
+    for o in hid:
+        o.hide_render = True
+    r.resolution_percentage = percent; r.filepath = path; r.film_transparent = only_avatar
+    r.image_settings.file_format = "PNG"; r.image_settings.color_mode = "RGBA"
+    if s.render.engine == "CYCLES":
+        oc = s.cycles.samples; s.cycles.samples = samples
+    bpy.ops.render.render(write_still=True)
+    if s.render.engine == "CYCLES":
+        s.cycles.samples = oc
+    for o in hid:
+        o.hide_render = False
+    r.resolution_percentage, r.filepath, r.film_transparent, r.image_settings.file_format, r.image_settings.color_mode = old
+
+
+def emit_strengths():
+    """(object, material, strength) for every emissive surface that renders."""
+    res = []
+    for o in bpy.context.scene.objects:
+        if o.type != "MESH" or o.hide_render:
+            continue
+        for sl in o.material_slots:
+            m = sl.material
+            if not m or not m.use_nodes:
+                continue
+            best = 0.0
+            for n in m.node_tree.nodes:
+                if n.type == "BSDF_PRINCIPLED" and "Emission Strength" in n.inputs:
+                    col = n.inputs["Emission Color"]
+                    lit = col.is_linked or max(col.default_value[:3]) > 0.001
+                    st = n.inputs["Emission Strength"]
+                    if lit and not st.is_linked:
+                        best = max(best, st.default_value)
+                elif n.type == "EMISSION" and n.outputs[0].is_linked and not n.inputs["Strength"].is_linked:
+                    best = max(best, n.inputs["Strength"].default_value)
+            if best > 0:
+                res.append((o.name, m.name, best))
+    return res
+
+
+def gate_light(spec):
+    """Two small renders (25%, few samples): the real frame and the avatar alone as a mask."""
+    L = spec.get("light", {}); caps = L.get("emit_caps", {}); dflt = caps.get("default", 5.0)
+    over = []; unlisted = []
+    for o, m, st in emit_strengths():
+        cap = next((v for k, v in caps.items() if k != "default" and (o.startswith(k) or m.startswith(k))), None)
+        if cap is not None and st > cap:
+            over.append(f"{o}/{m} {st:.1f}>{cap}")
+        elif cap is None and st > dflt:
+            unlisted.append(f"{o}/{m} {st:.1f}")
+    out("FAIL" if over else "PASS", "light.emit_caps", f"over their cap: {over[:6]}" if over else "listed emitters inside caps")
+    if unlisted:
+        out("WARN", "light.emit_unlisted", f"above default {dflt} with no cap in spec: {unlisted[:6]}")
+    tmp = os.path.join(bpy.app.tempdir, "gate_light"); pct = L.get("percent", 25)
+    quick_render(tmp + "_beauty.png", pct, L.get("samples", 16))
+    quick_render(tmp + "_mask.png", pct, 1, only_avatar=True)
+    px = load_px(tmp + "_beauty.png"); mk = load_px(tmp + "_mask.png")[..., 3] > 0.5; lu = luma(px); h, w = lu.shape
+    mean = float(lu.mean()); lo, hi = L.get("luma", [80, 130])
+    out("PASS" if lo <= mean <= hi else "FAIL", "light.mean_luma", f"{mean:.0f} (spec {lo}..{hi})")
+    blown = float((lu > 250).mean()); lim = L.get("max_blown", 0.02)
+    out("PASS" if blown <= lim else "FAIL", "light.blown", f"{blown:.1%} of pixels are pure white (limit {lim:.0%})")
+    hb = head_box()
+    if mk.mean() > 0.9:
+        out("FAIL", "light.mask", f"avatar mask covers {mk.mean():.0%} of the frame; set pieces are parented to the avatar or the film is not transparent, so subject/background numbers below are unreliable")
+    if hb and mk.any():
+        x0, y0, x1, y1 = [int(max(0, min(1, t)) * s) for t, s in zip(hb, (w, h, w, h))]
+        face = np.zeros_like(mk); face[y0:y1, x0:x1] = True; face &= mk
+        bg = float(lu[~mk].mean()) if (~mk).any() else 0.0
+        if face.any():
+            fl = float(lu[face].mean()); flo, fhi = L.get("face_luma", [70, 215])
+            out("PASS" if fl > bg else "FAIL", "light.subject_first", f"head luma {fl:.0f} vs background {bg:.0f}")
+            out("PASS" if flo <= fl <= fhi else "FAIL", "light.face_luma", f"{fl:.0f} (spec {flo}..{fhi})")
+            fb = float((lu[face] > 245).mean())
+            out("PASS" if fb <= 0.05 else "FAIL", "light.face_blown", f"{fb:.0%} of the head is washed white (limit 5%)")
+        else:
+            out("FAIL", "light.subject_first", "head is not in the avatar mask (hidden or out of frame)")
+        for name in L.get("dark_parts", []):
+            o = bpy.context.scene.objects.get(name); b = box2d(verts(o)) if o else None
+            if not b:
+                out("FAIL", f"light.dark.{name}", "missing"); continue
+            x0, y0, x1, y1 = [int(max(0, min(1, t)) * s) for t, s in zip(b, (w, h, w, h))]
+            reg = np.zeros_like(mk); reg[y0:y1, x0:x1] = True; reg &= mk
+            v = float(np.median(lu[reg])) if reg.any() else 0.0; cap = L.get("dark_max", 70)
+            out("PASS" if v <= cap else "FAIL", f"light.dark.{name}", f"median luma {v:.0f} (must stay under {cap})")
+    else:
+        out("FAIL", "light.mask", "avatar mask is empty")
+
+
+def gate_final(spec):
+    F = spec.get("final")
+    if not F:
+        return out("FAIL", "final.spec", "spec needs final {raw, graded, mask}")
+    raw, gr, mk = F.get("raw"), F.get("graded"), F.get("mask")
+    for k, p in (("raw", raw), ("graded", gr)):
+        if not p or not os.path.exists(p):
+            return out("FAIL", f"final.{k}", f"file missing: {p}")
+    newer = os.path.getmtime(gr) >= os.path.getmtime(raw)
+    out("PASS" if newer else "FAIL", "final.fresh", "graded is newer than raw" if newer else "graded is OLDER than the raw render: regrade")
+    a, b = load_px(raw), load_px(gr)
+    lu = luma(b); bp = float(np.percentile(lu, 2)); wp = float(np.percentile(lu, 99.5))
+    lo, hi = F.get("black_point", [0, 18])
+    out("PASS" if lo <= bp <= hi else "FAIL", "final.black_point", f"darkest 2% sits at luma {bp:.0f} (spec {lo}..{hi}; higher = milky blacks)")
+    wlo = F.get("white_min", 170)
+    out("PASS" if wp >= wlo else "FAIL", "final.white_point", f"brightest 0.5% at luma {wp:.0f} (need >= {wlo}; lower = flat, grey image)")
+    mx = b[..., :3].max(axis=-1); mn = b[..., :3].min(axis=-1); sat = float(((mx - mn) / np.maximum(mx, 1e-4)).mean())
+    slo, shi = F.get("saturation", [0.15, 0.75])
+    out("PASS" if slo <= sat <= shi else "FAIL", "final.saturation", f"mean {sat:.2f} (spec {slo}..{shi})")
+    if a.shape != b.shape:
+        return out("WARN", "final.avatar_colour", f"raw {a.shape[1]}x{a.shape[0]} and graded {b.shape[1]}x{b.shape[0]} differ in size; not compared")
+    if mk and os.path.exists(mk):
+        m = load_px(mk)
+        if m.shape == a.shape:
+            sel = m[..., 3] > 0.5
+            de = float(np.linalg.norm(lab(a)[sel] - lab(b)[sel], axis=-1).mean()) if sel.any() else 0.0
+            cap = F.get("max_delta_e", 14)
+            out("PASS" if de <= cap else "FAIL", "final.avatar_colour", f"grade moved the avatar's colours by delta-E {de:.1f} (limit {cap})")
+        else:
+            out("WARN", "final.avatar_colour", "mask size differs from the render; not compared")
+    else:
+        out("FAIL", "final.mask", "no avatar mask: grade with --mask so the character keeps its colours")
+
+
+def gate_motion(spec):
+    """Steps through the frames and measures every bone. No rendering."""
+    M = spec.get("motion")
+    if not M or "frames" not in M:
+        return out("FAIL", "motion.spec", "spec needs motion {frames: [first, last]}")
+    s = bpy.context.scene; f0, f1 = M["frames"]; names = M.get("armatures", ["Avatar"])
+    caps = M.get("max_deg", {}); dcap = caps.get("default", 25.0); planted = M.get("planted", [])
+    arms = [bpy.data.objects[n] for n in names if n in bpy.data.objects]
+    if len(arms) != len(names):
+        return out("FAIL", "motion.armatures", f"missing {set(names) - {a.name for a in arms}}")
+    rot = {}; pos = {}
+    for f in range(f0, f1 + 1):
+        s.frame_set(f)
+        for a in arms:
+            for pb in a.pose.bones:
+                m = a.matrix_world @ pb.matrix
+                rot.setdefault((a.name, pb.name), []).append(m.to_quaternion()); pos.setdefault((a.name, pb.name), []).append(m.translation.copy())
+    n = f1 - f0; over = {}; flips = {}; worst = (0.0, None, 0); still = np.ones(n, dtype=bool)
+    for key, qs in rot.items():
+        cap = caps.get(key[1], dcap)
+        for i in range(n):
+            d = math.degrees(qs[i].rotation_difference(qs[i + 1]).angle); d = min(d, 360 - d)
+            mv = (pos[key][i + 1] - pos[key][i]).length
+            if d > 0.03 or mv > 0.0003:
+                still[i] = False
+            if d > 120:
+                flips[key] = flips.get(key, 0) + 1
+            elif d > cap:
+                over[key] = over.get(key, 0) + 1
+            if d > worst[0] and d <= 120:
+                worst = (d, key, f0 + i)
+    out("INFO", "motion.fastest", f"{worst[0]:.1f} deg/frame on {worst[1]} at frame {worst[2]}")
+    out("FAIL" if over else "PASS", "motion.speed_cap", f"frames over the cap ({dcap} deg/frame): {dict(sorted(over.items(), key=lambda t: -t[1])[:5])}" if over else f"no bone over {dcap} deg/frame")
+    out("FAIL" if flips else "PASS", "motion.flips", f"sudden >120 deg jumps (roll flips): {dict(list(flips.items())[:5])}" if flips else "no rotation flips")
+    run = best = 0; at = f0
+    for i in range(n):
+        run = run + 1 if still[i] else 0
+        if run > best:
+            best = run; at = f0 + i - run + 1
+    lim = M.get("max_frozen", 12)
+    out("PASS" if best <= lim else "FAIL", "motion.frozen", f"longest fully frozen stretch {best} frames from frame {at} (limit {lim}); holds must keep breathing")
+    tol = M.get("slide_tol", 0.01)
+    for p in planted:
+        key = (p.get("armature", names[0]), p["bone"]); a0, a1 = p["frames"]
+        if key not in pos or a0 < f0 or a1 > f1:
+            out("FAIL", f"motion.planted.{p['bone']}", "bone missing or frames outside the checked range"); continue
+        pts = pos[key][a0 - f0:a1 - f0 + 1]; slide = max((q - pts[0]).length for q in pts)
+        out("PASS" if slide <= tol else "FAIL", f"motion.planted.{p['bone']}", f"moved {slide * 100:.1f} cm while planted in frames {a0}-{a1} (limit {tol * 100:.0f})")
+    if not planted:
+        out("WARN", "motion.planted", "no planted feet listed in the spec; foot slide was not checked")
+    s.frame_set(f0)
+
+
+GATES = {"scene": gate_scene, "body": gate_body, "face": gate_face, "frame": gate_frame, "camera": gate_camera,
+         "light": gate_light, "final": gate_final, "motion": gate_motion}
 
 
 def run(job, stages=None):
