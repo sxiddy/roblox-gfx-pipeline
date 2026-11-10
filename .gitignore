@@ -1,0 +1,12 @@
+/*
+!/.gitignore
+!/*.md
+!/docs/
+!/backup/
+!/gfx_references/
+!/tools/
+/tools/bin/
+/tools/__pycache__/
+*.blend
+*.blend1
+*.pyc

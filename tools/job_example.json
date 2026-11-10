@@ -1,0 +1,21 @@
+{
+  "name": "example_seated_portrait",
+  "avatar_dir": "C:/Users/Siddharth D/Projects/gfx and animation roblox blender/avatars/USERNAME",
+  "avatar_fresh_days": 1,
+  "engine": "CYCLES",
+  "allow_names": [],
+  "support": "seat",
+  "ground_tol": 0.02,
+  "planned_hidden": ["Handle3"],
+  "see_through": ["Rain", "Glass"],
+  "face": {"min_visible": 0.7, "max_turn": 75},
+  "head_frac": 0.30,
+  "head_xy": [0.38, 0.36],
+  "tol": 0.05,
+  "props": [
+    {"name": "Tomb", "cell": [0.0, 0.3, 0.4, 1.0], "may_cross_head": false},
+    {"name": "Moon", "cell": [0.6, 0.0, 1.0, 0.3], "may_cross_head": false}
+  ],
+  "out_of_frame": ["Foot.P", "Foot.N"],
+  "camera": {"elevation": [-10, 5], "azimuth": [-25, 25], "roll": [-3, 3], "lens": [70, 85], "distance": [2.5, 4.5]}
+}

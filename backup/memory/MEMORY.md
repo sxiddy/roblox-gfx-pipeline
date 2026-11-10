@@ -1,0 +1,24 @@
+- [Ask before review](ask-before-review.md) — get owner OK on an idea before subagent reviews/builds
+- [Can-you means ask](can-you-means-ask.md) — "can u do X?" is a question; answer and wait for go
+- [GFX pose suits avatar](gfx-pose-suits-avatar.md) — pose may differ from reference; fit the avatar, keep camera/set/light/grade
+- [GFX self-direct](gfx-self-direct.md) — new reference each time; derive camera/pose/light/grade myself, use roblox-gfx-match skill
+- [Owner rates lower](owner-rates-lower.md) — owner gave 4/10 where my checklist said 7; for GFX self-rate harshly, never ask for a score
+- [Pose plan first](gfx-pose-plan-first.md) — write exact pose/camera plan from the reference before building; no trial-and-error
+- [Roblox GFX pipeline](roblox-gfx-pipeline.md) — tools in this folder; garage v6 ~6/10; Nico 7 tuning items pending; DI3STINY next
+- [Usage cap](usage-cap.md) — never pass the owner's 5-hour cap (70% on 2026-10-26, 90% on 2026-11-11; use the latest stated); get_usage before every step
+- [Keep liked mood](gfx-keep-liked-mood.md) — owner preferred warm first preview; fix only broken parts; log lessons; full GPU+CPU ok
+- [Watch in Blender](gfx-watch-in-blender.md) — owner wants GFX work visible live in their Blender camera view
+- [Log every mistake](log-every-mistake.md) — append each GFX mistake to roblox-gfx-ideas SKILL.md mistake log
+- [No cringe](gfx-no-cringe.md) — no slogan tags, meme words, emoji faces or name plastered in GFX sets
+- [Shared Blender](shared-blender.md) — port 9876 Blender is shared across sessions; check ListAgents, prefer own headless Blender
+- [Animation standards](animation-standards.md) — voices, real SFX, plain subtitles, no title card, natural non-stiff motion
+- [Repo library](repo-library.md) — Projects/github-repos layout, REPO.md cards, which repos help animation work
+- [No rbx motion clips](no-rbx-motion-clips.md) — retargeted Roblox anims look weird to owner; animate procedurally
+- [Session = own project](session-is-own-project.md) — never reuse other projects' avatars/assets unless told
+- [Stage avatars normal](stage-avatars-normal.md) — extra characters = normal cool real Roblox avatars by vibe; no replicas/mannequins
+- [Animation pipeline lessons](animation-pipeline-lessons.md) — Roblox APIs, rigging, Blender gotchas, choreo tracking, owner prefs from the concert anim
+- [Owner picks characters](owner-picks-characters.md) — show numbered avatar candidates, wait for owner's pick before fetching/rigging
+- [Trendy avatar reference](trendy-avatar-reference.md) — owner-approved trendy boys/girls user ids = style bar + cast pool for future GFX/anims
+- [Find skills freely](find-skills-freely.md) — owner OK'd using any repo + installing skills via vercel-labs skills CLI when needed
+- [Concert v3 state](concert-v3-state.md) — in-progress 24 s Suhaa concert: files, done, remaining steps
+- [Read lessons first](read-lessons-first.md) — read gfx_mistake_log.md + docs/GFX_MASTER_PIPELINE.md before any GFX/anim; log mistakes there
