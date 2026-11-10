@@ -10,3 +10,5 @@
 *.blend
 *.blend1
 *.pyc
+/gfx_references/ink_game/*.mp4
+/gfx_references/ink_game/*.jpg

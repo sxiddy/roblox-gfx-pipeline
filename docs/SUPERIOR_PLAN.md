@@ -168,3 +168,42 @@ Each session: `get_usage` first and before every render; stop under the owner's 
 | 3 face rig | Built, tested on DI3STINY (sheet in `gfx_output/_kit_test/di3_sheet.png`): neutral matches the original, smirk/grin/glare/shock/sad read. Blink is wrong (squashed eye). Tested on one avatar only. |
 | 4 motion | `motion_kit.spring()` and gate `motion` built and tested on a synthetic move (hair keeps moving 25 frames after the stop; foot slide and freezes are caught). IK legs/arms NOT built. |
 | 5-9 | Not started. rhubarb, RIFE and wiggle are downloaded in `tools/bin` but never run. |
+
+## 10. The reference video, measured (2026-11-11) — this replaces the guesses in sections 1 and 4
+
+Source: `gfx_references/ink_game/ink_game.mp4` (480p copy, not in git). Tools: yt-dlp, PySceneDetect, OpenCV.
+Looked at: 28 mid-shot frames spread over the film, 21 consecutive frames of one action shot, and a per-frame
+difference measure over all 16,917 frames. The motion was measured, not watched at full speed.
+
+| Measured | Value | What it means for us |
+|---|---|---|
+| Frame rate | 24 fps | Smoothness is NOT 60 fps. Do not interpolate. Animate and render at 24 fps. RIFE is not needed. |
+| Repeated frames | 4.1% (animating "on twos": 0.2%) | Every frame is a new drawing ("on ones"). Never hold a pose by repeating frames. |
+| Frames with almost no change | 8.5% | Something moves in 9 frames out of 10: the camera drifts or the character breathes in every shot. |
+| Frames with big change | 31% | A third of the film is fast action or camera moves, with motion blur. |
+| Shots | 304 in 11 min 45 s | Median 1.9 s, mean 2.3 s, shortest 0.67 s, longest 9.8 s. 41% last 1-2 s, 37% last 2-4 s, 11% under 1 s, 12% over 4 s. |
+| Aspect | 16:9, no letterbox | The bars are only in the thumbnail. Do not add letterbox. |
+| Subtitles | Small plain white text, bottom centre | Same as the owner's standard. |
+
+What the frames show: about half the shots are close or medium with one character filling the frame; the rest
+are crowd wides (hundreds of bodies), top-downs, low angles and over-the-shoulder shots with a blurred body in
+the foreground. Strong depth of field everywhere. Outdoor palette teal + orange; indoor scenes are black with
+one hard spotlight. Tracksuits have fabric weave, the ground is cracked and textured, faces change per shot,
+effects (lightning, sparks, blood) are heavy.
+
+**Weak points in the reference, and the better version we build:**
+
+| Weak point seen | Our rule |
+|---|---|
+| Effects bury the character: in the lightning shot the face and body are unreadable for all 21 frames | Effects never cover the face or the silhouette for more than 6 frames in a row; put them behind or beside the subject, and run the `face` gate on effect shots |
+| Dark interiors crush to black; some characters barely separate from the wall | Every dark shot keeps a rim light; `light` gate: subject luma above background, face luma 70+ |
+| Subtitles are small and get lost on bright ground | White text with a dark outline and soft shadow (already our standard), size checked at phone width |
+| Block hands stay mittens | Same limit as ours; hide by framing or use the optional hands kit |
+| Fast average cut (1.9 s) suits action only | Match 1.5-2.5 s for action; calm or emotional scenes 3-5 s |
+
+**Film targets added to the motion gate's job spec (numbers to check on the final mp4; checker not built yet):**
+repeated frames under 5%, near-still frames under 10%, median shot length inside the range above, no shot under
+0.6 s, 24 fps, motion blur on.
+
+Corrections to earlier sections: section 3 "60 fps smoothness" and section 4 "30 fps" are wrong: use 24 fps on
+ones with motion blur. Section 4 "letterbox 2.39:1" is dropped.

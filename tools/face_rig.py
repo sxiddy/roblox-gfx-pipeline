@@ -231,7 +231,8 @@ def _layer_nodes(nt, uv, img, c, a, tx, ty, ang, sx, sy):
 
 
 def _over(nt, base, tex, factor_expr, a):
-    """Mix a layer over the running colour; factor = layer alpha x driven value."""
+    """Mix a layer over the running colour; factor = layer alpha. Layers are hidden by pushing their UV off the
+    image (a driven x offset of 100), not by a driven factor: driven Math-node values rendered stale in EEVEE."""
     N_ = nt.nodes; L = nt.links
     mul = N_.new("ShaderNodeMath"); mul.operation = "MULTIPLY"; L.new(tex.outputs["Alpha"], mul.inputs[0])
     mul.inputs[1].default_value = 1.0
@@ -345,24 +346,24 @@ def build(debug_dir=None):
     run = bt.outputs["Color"]; no = ("0", {}); one = ("1", {})
     mxy = (("mx", {"mx": "f_mouth_x"}), ("my", {"my": "f_mouth_y"}))
     if mo:
-        t = _layer_nodes(nt, U, imgs["mouth"], mc, a, mxy[0], mxy[1], ("mr", {"mr": "f_mouth_rot"}),
+        t = _layer_nodes(nt, U, imgs["mouth"], mc, a, ("mx + 100 * (mo > 0.6)", {"mx": "f_mouth_x", "mo": "f_mouth_open"}), mxy[1], ("mr", {"mr": "f_mouth_rot"}),
                          ("sx if abs(sx) > 0.05 else 0.05", {"sx": "f_mouth_sx"}), ("sy if abs(sy) > 0.05 else 0.05", {"sy": "f_mouth_sy"}))
-        run = _over(nt, run, t, ("1 - clamp(mo * 1.4, 0, 1)", {"mo": "f_mouth_open"}), a)
-    t = _layer_nodes(nt, U, imgs["open"], mc, a, mxy[0], mxy[1], ("mr", {"mr": "f_mouth_rot"}),
+        run = _over(nt, run, t, None, a)
+    t = _layer_nodes(nt, U, imgs["open"], mc, a, ("mx + 100 * (mo < 0.02)", {"mx": "f_mouth_x", "mo": "f_mouth_open"}), mxy[1], ("mr", {"mr": "f_mouth_rot"}),
                      ("0.75 + 0.25 * sx", {"sx": "f_mouth_sx"}), ("0.06 + 0.94 * mo", {"mo": "f_mouth_open"}))
-    run = _over(nt, run, t, ("clamp(mo * 10, 0, 1)", {"mo": "f_mouth_open"}), a)
+    run = _over(nt, run, t, None, a)
     exy = (("ex", {"ex": "f_eye_x"}), ("ey", {"ey": "f_eye_y"}))
     for s in "lr":
         e = layers["eye_" + s]
-        t = _layer_nodes(nt, U, imgs["eye_" + s], e["c"], a, exy[0], exy[1], no, ("es", {"es": "f_eye_s"}),
+        t = _layer_nodes(nt, U, imgs["eye_" + s], e["c"], a, ("ex + 100 * (b > 0.85)", {"ex": "f_eye_x", "b": "f_blink_" + s}), exy[1], no, ("es", {"es": "f_eye_s"}),
                          ("es * (1 - 0.8 * b)", {"es": "f_eye_s", "b": "f_blink_" + s}))
-        run = _over(nt, run, t, ("1 - clamp((b - 0.6) * 4, 0, 1)", {"b": "f_blink_" + s}), a)
-        t = _layer_nodes(nt, U, imgs["lid_" + s], e["c"], a, exy[0], exy[1], no, ("es", {"es": "f_eye_s"}), one)
-        run = _over(nt, run, t, ("clamp((b - 0.6) * 4, 0, 1)", {"b": "f_blink_" + s}), a)
+        run = _over(nt, run, t, None, a)
+        t = _layer_nodes(nt, U, imgs["lid_" + s], e["c"], a, ("ex + 100 * (b <= 0.85)", {"ex": "f_eye_x", "b": "f_blink_" + s}), exy[1], no, ("es", {"es": "f_eye_s"}), one)
+        run = _over(nt, run, t, None, a)
         b = layers["brow_" + s]; sign = "" if s == "l" else "-"
-        t = _layer_nodes(nt, U, imgs["brow_" + s], b["c"], a, no, ("by", {"by": f"f_brow_{s}_y"}),
+        t = _layer_nodes(nt, U, imgs["brow_" + s], b["c"], a, ("100 * (bs < 0.5)", {"bs": "f_brow_show"}) if drawn.get(s) else no, ("by", {"by": f"f_brow_{s}_y"}),
                          (f"{sign}br", {"br": f"f_brow_{s}_rot"}), one, one)
-        run = _over(nt, run, t, ("bs", {"bs": "f_brow_show"}) if drawn.get(s) else None, a)
+        run = _over(nt, run, t, None, a)
     nt.links.new(run, pb.inputs["Base Color"])
     me.materials.append(mat)
     # Blender evaluates a driver once while it is still half built, marks it invalid and then writes 0 (a zero
@@ -384,7 +385,7 @@ def pose(expr="neutral", frame=None):
         a[k] = float(v)
         if frame is not None:
             a.keyframe_insert(data_path=f'["{k}"]', frame=frame)
-    a.update_tag(); bpy.context.view_layer.update()
+    a.update_tag(); s = bpy.context.scene; s.frame_set(s.frame_current)      # drivers must re-run before a render
     return vals
 
 
