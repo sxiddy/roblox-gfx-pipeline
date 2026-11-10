@@ -192,8 +192,9 @@ def _image(name, arr):
 
 
 def _layer_img(name, col, mask):
-    a = np.zeros((N, N, 4), dtype=np.float32); soft = _grow(mask, 1)
-    a[soft] = col[soft]; a[..., 3] = 0; a[soft, 3] = 0.6; a[mask, 3] = 1
+    # carry the feature's soft fringe with it (the base under it is flat skin), fading out over 2 px
+    a = np.zeros((N, N, 4), dtype=np.float32); core = _grow(mask, 3); soft = _grow(mask, 5)
+    a[soft] = col[soft]; a[..., 3] = 0; a[soft, 3] = 0.3; a[_grow(mask, 4), 3] = 0.65; a[core, 3] = 1
     return _image(name, a)
 
 
@@ -271,8 +272,12 @@ def build(debug_dir=None):
         print("FACE_RIG skin", np.round(skin, 2), {k: (round(l["w"], 2), round(l["h"], 2), int(l["mask"].sum())) for k, l in layers.items()})
     hole = np.zeros(ok.shape, dtype=bool)
     for l in layers.values():
-        hole |= _grow(l["mask"], 2)
-    base = _inpaint(col, hole, ok)
+        hole |= _grow(l["mask"], 7)
+    # Fill with flat skin. A diffusion fill dragged the grey/white fringe of the eye inward and left a ghost
+    # eye in the base, which showed whenever the eye layer was hidden (blink).
+    base = col.copy(); base[hole & ok, :3] = skin
+    ring = _grow(hole, 3) & ~hole & ok
+    base[ring, :3] = base[ring, :3] * 0.5 + skin * 0.5
     edge = ok.copy(); alpha = np.zeros(ok.shape, dtype=np.float32)
     for k in range(8):                      # feather the plate border into the head
         alpha += edge / 8.0
