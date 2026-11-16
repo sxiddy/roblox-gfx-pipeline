@@ -82,22 +82,90 @@ def _tex(o):
     raise RuntimeError("face_rig: the head has no image on Base Color; this face cannot be rigged")
 
 
-def _sample(o, tex, n, frame):
-    """Shoot n x n rays at the face. Returns colours (n, n, 4, row 0 bottom), valid mask and hit points."""
-    c, x, y, z, half, front = frame
+def _hide_overlays(o, seeds):
+    """Hide the small loose pieces of the head mesh that sit in front of the face (lash cards, eye rims).
+    Some heads are built from loose pieces. DI3STINY: 4064 faces in 77 pieces: a face shell of two 589-face
+    halves with eye sockets, eye pieces of 272, eye rims of 96, single lashes of 28 and 6. The plate passed
+    behind the small ones and they poked through as jagged triangles. They stay painted on the eye layers.
+    Tried and dropped: lifting the plate over them (lumpy cheeks, plate through the hair fringe), hiding only
+    the lashes (the rim then poked through), hiding the eye pieces too (the sockets behind them are holes).
+    Uses a Mask modifier, nothing is deleted. seeds: polygons with a front-facing surface close behind them."""
+    md = o.modifiers.get("FaceRigHide")
+    if md:
+        o.modifiers.remove(md)
+    vg = o.vertex_groups.get("FaceRigHide")
+    if vg:
+        o.vertex_groups.remove(vg)
+    if not seeds:
+        return frozenset()
+    me = o.data; v2p = {}
+    for p in me.polygons:
+        for v in p.vertices:
+            v2p.setdefault(v, []).append(p.index)
+    seen = set(); hidden = set(); limit = max(8, 0.03 * len(me.polygons))
+    for s in seeds:
+        if s in seen:
+            continue
+        isl = {s}; stack = [s]
+        while stack:
+            for v in me.polygons[stack.pop()].vertices:
+                for q in v2p[v]:
+                    if q not in isl:
+                        isl.add(q); stack.append(q)
+        seen |= isl
+        if len(isl) <= limit:
+            hidden |= isl
+    if hidden:
+        vg = o.vertex_groups.new(name="FaceRigHide")
+        vg.add(sorted({v for p in hidden for v in me.polygons[p].vertices}), 1.0, "REPLACE")
+        md = o.modifiers.new("FaceRigHide", "MASK"); md.vertex_group = "FaceRigHide"; md.invert_vertex_group = True
+    return frozenset(hidden)
+
+
+def _sample(o, tex, n, frame, skip=(), overlays=None):
+    """Shoot n x n rays at the face. Returns colours (n, n, 4, row 0 bottom), valid mask and hit points.
+    skip: polygon indices to pass through. overlays: a set that collects polygons with a front-facing surface
+    close behind them."""
+    c, x, y, z, half, front = frame; eps = front * 1e-4
     me = o.data; uvl = me.uv_layers.active.data; h, w = tex.shape[:2]
     col = np.zeros((n, n, 4), dtype=np.float32); ok = np.zeros((n, n), dtype=bool); pts = np.zeros((n, n, 3), dtype=np.float32)
     for j in range(n):
         for i in range(n):
             p = c + x * (half * (2 * i / (n - 1) - 1)) + y * (half * (2 * j / (n - 1) - 1)) + z * (front * 1.5)
             hit, loc, nor, idx = o.ray_cast(p, -z)
+            first = (hit, loc, nor, idx)
+            while hit and idx in skip:
+                hit, loc, nor, idx = o.ray_cast(loc - z * eps, -z)
+            if not hit or nor.dot(z) < 0.3 or (first[1] - loc).dot(z) > front * 0.1:
+                # Nothing usable close behind a skipped piece: keep the first hit. Without the distance test
+                # the plate dived to surfaces deep inside the head and the head's own eye showed in front.
+                hit, loc, nor, idx = first
             if not hit or nor.dot(z) < 0.3:
                 continue
+            if overlays is not None:
+                h2, l2, n2, _i2 = o.ray_cast(loc - z * eps, -z)
+                if h2 and n2.dot(z) > 0.3 and (loc - l2).dot(z) < front * 0.1:
+                    overlays.add(idx)
             poly = me.polygons[idx]
             wts = poly_3d_calc([me.vertices[v].co for v in poly.vertices], loc)
             u = sum((uvl[li].uv * wt for li, wt in zip(poly.loop_indices, wts)), Vector((0, 0)))
             col[j, i] = tex[int((u.y % 1) * (h - 1) + 0.5), int((u.x % 1) * (w - 1) + 0.5)]
             ok[j, i] = True; pts[j, i] = loc
+    # Rays that land exactly on a mesh edge miss. Each miss used to become a transparent spot in the plate
+    # (the border feather widened it to ~15 px), and the head's own open eye showed through during a blink.
+    # Fill misses that are enclosed by hits from their neighbours.
+    todo = ~_grow(~_grow(ok, 3), 3) & ~ok
+    for _ in range(8):
+        if not todo.any():
+            break
+        acc_c = np.zeros_like(col); acc_p = np.zeros_like(pts); cnt = np.zeros(ok.shape, dtype=np.float32)
+        for dj, di in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            kk = np.roll(ok, (dj, di), axis=(0, 1))
+            acc_c += np.roll(col, (dj, di), axis=(0, 1)) * kk[..., None]
+            acc_p += np.roll(pts, (dj, di), axis=(0, 1)) * kk[..., None]; cnt += kk
+        new = todo & (cnt > 0)
+        col[new] = acc_c[new] / cnt[new][:, None]; pts[new] = acc_p[new] / cnt[new][:, None]
+        ok = ok | new; todo = todo & ~new
     return col, ok, pts
 
 
@@ -258,7 +326,8 @@ def build(debug_dir=None):
     co = np.array([v.co for v in o.data.vertices]); c = Vector(co.mean(axis=0)); rel = co - np.array(c)
     ex = [np.ptp(rel @ np.array(ax)) for ax in (x, y, z)]
     half = 0.43 * min(ex[0], ex[1]); frame = (c, x, y, z, half, ex[2])
-    col, ok, _ = _sample(o, tex, N, frame)
+    over = set(); col, ok, dense_pts = _sample(o, tex, N, frame, overlays=over)
+    hidden = _hide_overlays(o, over)
     if ok.mean() < 0.4:
         raise RuntimeError("face_rig: under 40% of the face plate hit the head; is the head mesh the right object?")
     skin, layers, dark, ye, eh = _split(col, ok)
@@ -275,9 +344,17 @@ def build(debug_dir=None):
         hole |= _grow(l["mask"], 7)
     # Fill with flat skin. A diffusion fill dragged the grey/white fringe of the eye inward and left a ghost
     # eye in the base, which showed whenever the eye layer was hidden (blink).
-    base = col.copy(); base[hole & ok, :3] = skin
+    # The fill takes the local skin tone (clean skin pixels only, spread inward, then blurred): one flat median
+    # colour left a pale patch around a closed eye wherever the face texture is shaded.
+    clean = ok & ~hole & (np.linalg.norm(col[..., :3] - skin, axis=-1) < 0.09)
+    fill = _inpaint(col, ~clean, clean)[..., :3]
+    for _ in range(3):
+        p = np.pad(fill, ((6, 6), (6, 6), (0, 0)), mode="edge"); cs = np.cumsum(np.cumsum(p, axis=0), axis=1)
+        cs = np.pad(cs, ((1, 0), (1, 0), (0, 0)))
+        fill = (cs[13:, 13:] - cs[:-13, 13:] - cs[13:, :-13] + cs[:-13, :-13]) / 169.0
+    base = col.copy(); base[hole & ok, :3] = fill[hole & ok]
     ring = _grow(hole, 3) & ~hole & ok
-    base[ring, :3] = base[ring, :3] * 0.5 + skin * 0.5
+    base[ring, :3] = base[ring, :3] * 0.5 + fill[ring] * 0.5
     edge = ok.copy(); alpha = np.zeros(ok.shape, dtype=np.float32)
     for k in range(8):                      # feather the plate border into the head
         alpha += edge / 8.0
@@ -316,10 +393,33 @@ def build(debug_dir=None):
     g = GRID + 1; _c2, ok2, pts = _sample(o, tex, g, frame)
     verts = []; index = {}; faces = []; uvs = []
     off = z * (OFFSET / max(o.matrix_world.to_scale()))
+    # The plate is a smooth cover over the finely sampled face, not a copy of the coarse grid hits. On heads
+    # built from loose pieces the eye piece steps up to 24 mm from the face shell (measured); a plate on the
+    # grid hits sat behind those steps and the head's own eye showed as a ring during a blink. Tried and
+    # dropped: per-vertex highest point (lumpy cheeks), a 96-cell plate hugging the hits (eyeball relief and
+    # facets in the shading), one constant push forward (plate edge off the jaw).
+    zv = np.array(z, dtype=np.float32); depth = (dense_pts @ zv).astype(np.float32); w = ok.astype(np.float32)
+    rb = 2 * int(np.ceil((N - 1) / GRID)); kb = 2 * rb + 1
+    def blur(arr):
+        pd = np.pad(arr, rb, mode="edge"); cs = np.pad(np.cumsum(np.cumsum(pd, axis=0), axis=1), ((1, 0), (1, 0)))
+        return cs[kb:, kb:] - cs[:-kb, kb:] - cs[kb:, :-kb] + cs[:-kb, :-kb]
+    wsum = np.maximum(blur(w), 1e-6); env = depth * w
+    for _ in range(12):
+        env = np.maximum(blur(env * w) / wsum, depth * w)
+    env = blur(env * w) / wsum                               # last pass smooths ...
+    core = ~_grow(~ok, 3 * rb)                               # ... and the inside rises by what that took away
+    env += max(float((depth - env)[core].max()), 0.0) if core.any() else 0.0
+    gi = np.round(np.arange(g) * (N - 1) / GRID).astype(int)
+    lift = np.clip(env[np.ix_(gi, gi)] - pts @ zv, 0, None) * ok2
+    inner = ok2.copy(); fade = np.zeros(ok2.shape, dtype=np.float32)
+    for _ in range(4):                      # no lift at the plate border, so the edge stays on the head
+        inner = ~_grow(~inner, 1); inner[0] = inner[-1] = False; inner[:, 0] = inner[:, -1] = False
+        fade += inner / 4.0
+    lift = lift * fade * fade * (3 - 2 * fade)
     for j in range(g):
         for i in range(g):
             if ok2[j, i]:
-                index[(j, i)] = len(verts); verts.append(Vector(pts[j, i]) + off)
+                index[(j, i)] = len(verts); verts.append(Vector(pts[j, i]) + z * float(lift[j, i]) + off)
     for j in range(GRID):
         for i in range(GRID):
             q = [(j, i), (j, i + 1), (j + 1, i + 1), (j + 1, i)]
@@ -351,11 +451,11 @@ def build(debug_dir=None):
     run = bt.outputs["Color"]; no = ("0", {}); one = ("1", {})
     mxy = (("mx", {"mx": "f_mouth_x"}), ("my", {"my": "f_mouth_y"}))
     if mo:
-        t = _layer_nodes(nt, U, imgs["mouth"], mc, a, ("mx + 100 * (mo > 0.6)", {"mx": "f_mouth_x", "mo": "f_mouth_open"}), mxy[1], ("mr", {"mr": "f_mouth_rot"}),
+        t = _layer_nodes(nt, U, imgs["mouth"], mc, a, ("mx + 100 * (mo >= 0.02)", {"mx": "f_mouth_x", "mo": "f_mouth_open"}), mxy[1], ("mr", {"mr": "f_mouth_rot"}),
                          ("sx if abs(sx) > 0.05 else 0.05", {"sx": "f_mouth_sx"}), ("sy if abs(sy) > 0.05 else 0.05", {"sy": "f_mouth_sy"}))
         run = _over(nt, run, t, None, a)
     t = _layer_nodes(nt, U, imgs["open"], mc, a, ("mx + 100 * (mo < 0.02)", {"mx": "f_mouth_x", "mo": "f_mouth_open"}), mxy[1], ("mr", {"mr": "f_mouth_rot"}),
-                     ("0.75 + 0.25 * sx", {"sx": "f_mouth_sx"}), ("0.06 + 0.94 * mo", {"mo": "f_mouth_open"}))
+                     ("0.35 + 0.65 * sx", {"sx": "f_mouth_sx"}), ("0.06 + 0.94 * mo", {"mo": "f_mouth_open"}))
     run = _over(nt, run, t, None, a)
     exy = (("ex", {"ex": "f_eye_x"}), ("ey", {"ey": "f_eye_y"}))
     for s in "lr":
@@ -380,7 +480,9 @@ def build(debug_dir=None):
     if bad:
         raise RuntimeError(f"face_rig: {len(bad)} drivers are invalid, e.g. {bad[0]}")
     return {"found": sorted(k for k in layers if not (k.startswith("brow") and drawn.get(k[-1]))),
-            "drawn_brows": sorted(drawn), "plate_faces": len(faces), "coverage": round(float(ok.mean()), 2)}
+            "drawn_brows": sorted(drawn), "plate_faces": len(faces), "coverage": round(float(ok.mean()), 2),
+            "hidden_overlay_faces": len(hidden),
+            "max_lift_mm": round(float(lift.max() * max(o.matrix_world.to_scale())) * 1000, 1)}
 
 
 def pose(expr="neutral", frame=None):

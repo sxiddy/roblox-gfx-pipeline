@@ -129,3 +129,21 @@ Turn the spec into numbers and gate each stage before moving on:
 8. **Score = the lowest part's score + 1.** Anything under 7 gets another round.
 9. **Owner rule (2026-10-26):** the pose does not have to copy the reference. Pick a pose that suits the avatar
    (proportions, outfit, vibe) while keeping the reference's camera, set, lighting and grade.
+
+## Quality baseline for every GFX (owner, 2026-11-16: alley v2 "is FIRE, every gfx must build in the same quality")
+
+The approved bar is `gfx_output/Bio_IsHere/alley_v2_final.png`. Its script `tools/alley_v2.py` is the worked example: copy its structure for every new GFX, do not start from the older `style_*.py` files. Look at the approved image before building and put the new final next to it before presenting; if the new one is weaker on any part, do another round.
+
+Every GFX must do all of these, in this order:
+1. One script with `build`, `render`, `passes` and `gate` modes, run in your own headless Blender. The exact pose, camera, frame-edge, set and light plan goes in the docstring before any Blender call.
+2. Before listing set pieces, work out what the frame can show: body width in head-widths, and the bottom ray angle of the camera. Build only what is in view.
+3. Camera solved with `frame_head` and asserted; character large in frame (head about 25-30% of the width); low or otherwise chosen angle, 40 mm class lens, f/2.8.
+4. Block hands hidden by pose or framing, solved by counting visible hand vertices with ray casts. Anything crossing the face (aura, props, rain) is hidden or moved, and its size reported.
+5. Every prop placed from its frame position (ray from the camera onto a wall or floor plane), never by guessed world coordinates.
+6. Light: one warm key, one coloured rim as a narrow beam (spread about 50), fill near 4 W, no world haze, background lit by its own practicals. Dark hair stays dark (multiply the hair texture, lower the rim). No words anywhere; check neon shapes for accidental letters.
+7. `job.json` + `tools/gate.py` stages scene, body, face, frame, camera, light before any render; all must pass.
+8. One or two 50% previews at 64 samples, fix only what is broken, then Cycles OptiX 256 samples at 100%.
+9. Passes (mask, hair, emission, depth, normal), then `tools/finish.py finish`; read its per-layer change numbers and raise strengths until each layer is visible but subtle. Gentle grade, grain 0.006.
+10. `gate.py final`, then send the final plus a side-by-side, with a harsh per-part self-rating and a list of what differs from the plan and what was not verified.
+
+Known weak parts to push further each time (alley v2 scored these lowest): set density and depth, body acting (no stiff plank poses), and a face expression from `tools/face_rig.py` instead of the neutral default.

@@ -22,3 +22,4 @@
 - [Find skills freely](find-skills-freely.md) — owner OK'd using any repo + installing skills via vercel-labs skills CLI when needed
 - [Concert v3 state](concert-v3-state.md) — in-progress 24 s Suhaa concert: files, done, remaining steps
 - [Read lessons first](read-lessons-first.md) — read gfx_mistake_log.md + docs/GFX_MASTER_PIPELINE.md before any GFX/anim; log mistakes there
+- [GFX quality baseline: alley v2](gfx-quality-baseline-alley-v2.md) — owner-approved bar and recipe for every future GFX
